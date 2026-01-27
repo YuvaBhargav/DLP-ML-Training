@@ -1,0 +1,88 @@
+[
+  {
+    "bin_id": "BIN_001",
+    "sub_bin_id": "BIN_001_MAIN",
+    "severity": "HIGH",
+    "allowed_behavior": false,
+    "auto_close_eligible": false,
+    "confidence": 5,
+    "review_required": true,
+    "business_justification": "Outbound transmission of PII to personal email without managerial oversight violates regulatory and internal data protection policies",
+    "policy_alignment": "VIOLATION"
+  },
+  {
+    "bin_id": "BIN_001",
+    "sub_bin_id": "BIN_001_EDGE_1",
+    "severity": "HIGH",
+    "allowed_behavior": false,
+    "auto_close_eligible": false,
+    "confidence": 5,
+    "review_required": true,
+    "business_justification": "Outbound transmission of PII to personal email without managerial oversight violates regulatory and internal data protection policies",
+    "policy_alignment": "VIOLATION"
+  },
+  {
+    "bin_id": "BIN_001",
+    "sub_bin_id": "BIN_001_EDGE_2",
+    "severity": "MEDIUM",
+    "allowed_behavior": true,
+    "auto_close_eligible": false,
+    "confidence": 4,
+    "review_required": false,
+    "policy_alignment": "EXCEPTION"
+  },
+  {
+    "bin_id": "BIN_001",
+    "sub_bin_id": "BIN_001_EDGE_3",
+    "severity": "HIGH",
+    "allowed_behavior": false,
+    "auto_close_eligible": false,
+    "confidence": 5,
+    "review_required": true,
+    "business_justification": "Outbound transmission of PII to personal email without managerial oversight violates regulatory and internal data protection policies",
+    "policy_alignment": "VIOLATION"
+  },
+  {
+    "bin_id": "BIN_001",
+    "sub_bin_id": "BIN_001_EDGE_4",
+    "severity": "HIGH",
+    "allowed_behavior": false,
+    "auto_close_eligible": false,
+    "confidence": 5,
+    "review_required": true,
+    "business_justification": "Outbound transmission of PII to personal email without managerial oversight violates regulatory and internal data protection policies",
+    "policy_alignment": "VIOLATION"
+  },
+  {
+    "bin_id": "BIN_001",
+    "sub_bin_id": "BIN_001_EDGE_5",
+    "severity": "HIGH",
+    "allowed_behavior": false,
+    "auto_close_eligible": false,
+    "confidence": 5,
+    "review_required": true,
+    "business_justification": "Outbound transmission of PII to personal email without managerial oversight violates regulatory and internal data protection policies",
+    "policy_alignment": "VIOLATION"
+  },
+  {
+    "bin_id": "BIN_001",
+    "severity": "HIGH",
+    "allowed_behavior": false,
+    "auto_close_eligible": false,
+    "confidence": 5,
+    "review_required": true,
+    "business_justification": "Outbound transmission of PII to personal email without managerial oversight violates regulatory and internal data protection policies",
+    "policy_alignment": "VIOLATION"
+  },
+  {
+    "bin_id": "BIN_001",
+    "sub_bin_id": "BIN_001_OUTLIER",
+    "severity": "HIGH",
+    "allowed_behavior": false,
+    "auto_close_eligible": false,
+    "confidence": 5,
+    "review_required": true,
+    "business_justification": "Outbound transmission of PII to personal email without managerial oversight violates regulatory and internal data protection policies",
+    "policy_alignment": "VIOLATION"
+  }
+]
