@@ -39,79 +39,100 @@ tab1, tab2 = st.tabs(["Single Incident Analyzer", "Batch File Processor"])
 # TAB 1: SINGLE INCIDENT ANALYZER
 # ─────────────────────────────────────────────
 with tab1:
-    st.sidebar.header("Incident Details (Single Test)")
+    st.sidebar.header("Incident Details")
     sender   = st.sidebar.text_input("Sender Email", "user001@yuva.com")
     receiver = st.sidebar.text_input("Receiver Email", "personal@gmail.com")
     policy   = st.sidebar.text_input("DLP Policy", "PII_PAN")
-    cc       = st.sidebar.text_input("CC (Optional)", "", help="Required for BIN_002 source code rules")
+    cc       = st.sidebar.text_input("CC (Optional)", "", help="Required for source code rules")
     
-    analyze_btn = st.sidebar.button("Analyze Incident Across All Bins", type="primary", use_container_width=True)
+    analyze_btn = st.sidebar.button("Analyze Incident", type="primary", use_container_width=True)
     
     if analyze_btn:
         if not sender or not receiver or not policy:
             st.warning("Please provide Sender, Receiver, and Policy to analyze.")
         else:
-            st.subheader(f"Multi-Bin Analysis Results for `{sender}`")
-            st.markdown("Comparing how the same event is evaluated by the specialized ML models for each bin.")
-            
-            # Run prediction for all 3 bins
-            cols = st.columns(3)
-            bins = ["BIN_001", "BIN_002", "BIN_003"]
-            
-            for i, bin_id in enumerate(bins):
-                with cols[i]:
-                    model_artifacts = get_model_and_baseline(bin_id)
-                    if not model_artifacts:
-                        st.error(f"Failed to load {bin_id} models.")
-                        continue
-                        
-                    model, scaler, le, feature_cols, history = model_artifacts
-                    combined_prior = history.get(sender, [])
+            # Auto-route to the correct Bin Model based on Policy
+            p = policy.upper()
+            if p == "SOURCE_CODE":
+                bin_id = "BIN_002"
+            elif p.startswith("BU_"):
+                bin_id = "BIN_003"
+            else:
+                bin_id = "BIN_001"
+                
+            model_artifacts = get_model_and_baseline(bin_id)
+            if not model_artifacts:
+                st.error(f"Failed to load models. Please ensure {bin_id} models exist.")
+            else:
+                model, scaler, le, feature_cols, history = model_artifacts
+                combined_prior = history.get(sender, [])
+                has_history = len(combined_prior) > 0
+                
+                ev = {
+                    "bin_id": bin_id,
+                    "sender": sender,
+                    "receiver": receiver,
+                    "dlp_policy": policy,
+                    "cc": cc,
+                    "timestamp": datetime.now().isoformat()
+                }
+                
+                feats = compute_features(ev, combined_prior, feature_cols)
+                X_raw = pd.DataFrame([feats], columns=feature_cols)
+                X_sc  = scaler.transform(X_raw)
+
+                if isinstance(model, DummyModel):
+                    label_idx = model.label_idx
+                    proba = model.predict_proba(X_sc)[0]
+                else:
+                    label_idx = model.predict(X_sc)[0]
+                    proba     = model.predict_proba(X_sc)[0]
+
+                severity   = le.inverse_transform([label_idx])[0]
+                confidence = round(proba[0] * 100, 1) if isinstance(model, DummyModel) else round(proba[label_idx] * 100, 1)
+
+                if severity == "CRITICAL":
+                    color = "red"
+                    action = "ESCALATE IMMEDIATELY"
+                elif severity == "HIGH":
+                    color = "orange"
+                    action = "HUMAN REVIEW REQUIRED"
+                else:
+                    color = "green"
+                    action = "LOG AND MONITOR"
+
+                st.markdown(f"""
+                    <div style="background-color: #262730; padding: 20px; border-radius: 10px; border-left: 8px solid {color}; margin-bottom: 20px;">
+                        <h2 style="margin:0; color:{color}; font-size:2rem;">SEVERITY: {severity}</h2>
+                        <p style="margin:5px 0 0 0; font-size: 1.2em;"><strong>Recommended Action:</strong> {action}</p>
+                        <p style="margin:5px 0 0 0; color:#bbb;">Model Confidence: {confidence}%</p>
+                    </div>
+                """, unsafe_allow_html=True)
+                
+                # Side-by-side breakdown
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("### 📊 Behavioral Context")
+                    st.caption("Derived from the sender's historical baseline.")
+                    if not has_history:
+                        st.info("First-time offender. No historical baseline found.")
                     
-                    ev = {
-                        "bin_id": bin_id,
-                        "sender": sender,
-                        "receiver": receiver,
-                        "dlp_policy": policy,
-                        "cc": cc,
-                        "timestamp": datetime.now().isoformat()
-                    }
+                    # Display key behavioral metrics
+                    m1, m2 = st.columns(2)
+                    m1.metric("30-Day Violations", feats.get("sender_30d_violation_count", 0))
+                    m2.metric("7-Day Violations", feats.get("sender_7d_violation_count", 0))
                     
-                    feats = compute_features(ev, combined_prior, feature_cols)
-                    X_raw = pd.DataFrame([feats], columns=feature_cols)
-                    X_sc  = scaler.transform(X_raw)
-
-                    if isinstance(model, DummyModel):
-                        label_idx = model.label_idx
-                        proba = model.predict_proba(X_sc)[0]
-                    else:
-                        label_idx = model.predict(X_sc)[0]
-                        proba     = model.predict_proba(X_sc)[0]
-
-                    severity   = le.inverse_transform([label_idx])[0]
-                    confidence = round(proba[0] * 100, 1) if isinstance(model, DummyModel) else round(proba[label_idx] * 100, 1)
-
-                    if severity == "CRITICAL":
-                        color = "red"
-                        action = "ESCALATE IMMEDIATELY"
-                    elif severity == "HIGH":
-                        color = "orange"
-                        action = "HUMAN REVIEW REQUIRED"
-                    else:
-                        color = "green"
-                        action = "LOG AND MONITOR"
-
-                    st.markdown(f"""
-                        <div style="background-color: #262730; padding: 15px; border-radius: 10px; border-left: 5px solid {color}; margin-bottom:15px;">
-                            <h4 style="margin:0; color:#eee;">{bin_id}</h4>
-                            <h2 style="margin:0; color:{color}; font-size:1.5rem;">{severity}</h2>
-                            <p style="margin:5px 0 0 0; font-size: 0.9em; color:#bbb;">{action}</p>
-                            <p style="margin:0; font-size: 0.8em; color:#888;">Confidence: {confidence}%</p>
-                        </div>
-                    """, unsafe_allow_html=True)
+                    m3, m4 = st.columns(2)
+                    days_since = feats.get("days_since_last_violation", 999.0)
+                    days_since_str = "N/A" if days_since == 999.0 else f"{days_since} days"
+                    m3.metric("Last Violation", days_since_str)
+                    m4.metric("New Receiver?", "Yes" if feats.get("sender_new_receiver", 0) == 1 else "No")
                     
-                    with st.expander("View Feature Context"):
-                        st.json(feats)
+                with col2:
+                    st.markdown("### 🧮 Model Features")
+                    st.caption("The exact 14-dimensional feature vector fed to the ML model.")
+                    st.json(feats)
 
 
 # ─────────────────────────────────────────────
