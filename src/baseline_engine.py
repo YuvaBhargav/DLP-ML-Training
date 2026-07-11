@@ -81,6 +81,20 @@ def process_bin(bin_id):
         is_weekend = 1 if ts.weekday() >= 5 else 0
         is_after_hours = 1 if (hour < 8 or hour >= 18) else 0
 
+        # New Production Base Features
+        is_ftc = 1 if ev.get("sender_type", "FTE") == "FTC" else 0
+        is_encrypted_payload = 1 if ev.get("is_encrypted", False) else 0
+        is_personal_recipient = 1 if ev.get("receiver_domain_type", "PERSONAL") == "PERSONAL" else 0
+        
+        cc_raw = ev.get("cc", "")
+        cc_list = [c.strip() for c in cc_raw.split(",") if c.strip()]
+        internal_ccs = [c for c in cc_list if "yuva.com" in c]
+        internal_cc_count = len(internal_ccs)
+        has_manager_cc = 1 if any("manager" in c for c in internal_ccs) else 0
+        
+        context_confidence = float(ev.get("context_confidence", 1.0))
+        is_false_positive_regex = 1 if context_confidence < 0.5 else 0
+
         # Create behavioral dict
         beh = {
             "sender_30d_violation_count": len(prior_30d),
@@ -93,38 +107,55 @@ def process_bin(bin_id):
             "hour_of_day": hour,
             "is_weekend": is_weekend,
             "is_after_hours": is_after_hours,
+            "is_ftc": is_ftc,
+            "is_encrypted_payload": is_encrypted_payload,
+            "is_personal_recipient": is_personal_recipient,
+            "internal_cc_count": internal_cc_count,
+            "has_manager_cc": has_manager_cc,
+            "is_false_positive_regex": is_false_positive_regex,
+            "context_confidence": round(context_confidence, 2)
         }
         
         ev.update(beh)
         
-        # Base severity
+        # Ground Truth Labeling based on Production Scenarios
+        # Default fallback
         sub_bin_id = ev.get("sub_bin_id")
-        base_sev = sub_bin_map.get(sub_bin_id, default_label)
+        sev = sub_bin_map.get(sub_bin_id, default_label)
         
-        # Escalation rules
-        sev = base_sev
-        
-        # Escalation MEDIUM -> HIGH
-        if sev == "MEDIUM":
-            if beh["sender_30d_violation_count"] >= 5:
+        # Scenario 1: False Positive Content Validation
+        if is_false_positive_regex:
+            sev = "MEDIUM" # (Low/No alert)
+        else:
+            # Scenario 4: Encrypted payload -> HIGH
+            if is_encrypted_payload:
                 sev = "HIGH"
-            elif beh["sender_policy_repeat"] == 1 and beh["days_since_last_violation"] < 3:
-                sev = "HIGH"
-            elif beh["is_after_hours"] == 1 and beh["sender_new_receiver"] == 1:
-                sev = "HIGH"
+            
+            # Scenario 3: >= 2 internal persons in CC -> MEDIUM
+            if internal_cc_count >= 2:
+                sev = "MEDIUM"
                 
-        # Escalation HIGH -> CRITICAL
+            # Sender Scenario: FTC sending externally -> CRITICAL
+            if is_ftc and is_personal_recipient:
+                sev = "CRITICAL"
+                
+            # Receiver Scenarios
+            if not is_personal_recipient:
+                # Scenario 2: Vendor/Business domain -> LOW/MEDIUM (not raised)
+                if has_manager_cc:
+                    sev = "MEDIUM"
+                elif sev == "CRITICAL":
+                    sev = "HIGH"
+            else:
+                # Scenario 1: Personal domain -> HIGH
+                if sev == "MEDIUM":
+                    sev = "HIGH"
+                
+        # Existing Behavioral Escalations (Volume spikes overrule standard rules)
         if sev == "HIGH":
             if beh["sender_30d_violation_count"] >= 15:
                 sev = "CRITICAL"
             elif beh["sender_7d_violation_count"] >= 7:
-                sev = "CRITICAL"
-
-        # BIN_002/003 specific logic could be injected here if needed
-        # (e.g., BIN_003 contractors are high risk)
-        if bin_id == "BIN_003" and sev != "CRITICAL":
-            # Just an example of bin-specific logic
-            if beh["is_weekend"] == 1:
                 sev = "CRITICAL"
                 
         ev["severity"] = sev

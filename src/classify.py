@@ -130,6 +130,20 @@ def compute_features(ev: dict, prior: list, feature_cols: list) -> dict:
         last_ts    = max(h["ts"] for h in prior)
         days_since = (ts - last_ts).total_seconds() / 86400.0
 
+    # New Production Base Features
+    is_ftc = 1 if ev.get("sender_type", "FTE") == "FTC" else 0
+    is_encrypted_payload = 1 if ev.get("is_encrypted", False) else 0
+    is_personal_recipient = 1 if ev.get("receiver_domain_type", "PERSONAL") == "PERSONAL" else 0
+    
+    cc_raw = ev.get("cc", "")
+    cc_list = [c.strip() for c in cc_raw.split(",") if c.strip()]
+    internal_ccs = [c for c in cc_list if "yuva.com" in c]
+    internal_cc_count = len(internal_ccs)
+    has_manager_cc = 1 if any("manager" in c for c in internal_ccs) else 0
+    
+    context_confidence = float(ev.get("context_confidence", 1.0))
+    is_false_positive_regex = 1 if context_confidence < 0.5 else 0
+
     beh = {
         "sender_30d_violation_count": len(prior_30d),
         "sender_7d_violation_count":  len(prior_7d),
@@ -141,6 +155,13 @@ def compute_features(ev: dict, prior: list, feature_cols: list) -> dict:
         "hour_of_day":                 ts.hour,
         "is_weekend":                  1 if ts.weekday() >= 5 else 0,
         "is_after_hours":              1 if (ts.hour < 8 or ts.hour >= 18) else 0,
+        "is_ftc": is_ftc,
+        "is_encrypted_payload": is_encrypted_payload,
+        "is_personal_recipient": is_personal_recipient,
+        "internal_cc_count": internal_cc_count,
+        "has_manager_cc": has_manager_cc,
+        "is_false_positive_regex": is_false_positive_regex,
+        "context_confidence": round(context_confidence, 2)
     }
     
     # Only include behavioral features that the model actually expects
