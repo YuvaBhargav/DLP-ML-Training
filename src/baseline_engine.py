@@ -81,6 +81,9 @@ def process_bin(bin_id):
         is_weekend = 1 if ts.weekday() >= 5 else 0
         is_after_hours = 1 if (hour < 8 or hour >= 18) else 0
 
+        # Netskope Feature
+        violation_count = int(ev.get("violation_count", 1))
+
         # New Production Base Features
         is_ftc = 1 if "@yuvaext" in sender.lower() else 0
         is_encrypted_payload = 1 if policy.upper() == "ENCRYPTED" else 0
@@ -107,6 +110,7 @@ def process_bin(bin_id):
             "hour_of_day": hour,
             "is_weekend": is_weekend,
             "is_after_hours": is_after_hours,
+            "violation_count": violation_count,
             "is_ftc": is_ftc,
             "is_encrypted_payload": is_encrypted_payload,
             "is_personal_recipient": is_personal_recipient,

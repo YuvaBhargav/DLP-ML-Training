@@ -85,6 +85,7 @@ def process_bin(bin_id):
         "hour_of_day",
         "is_weekend",
         "is_after_hours",
+        "violation_count",
     ]
     
     # filter features that exist

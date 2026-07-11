@@ -143,6 +143,7 @@ def compute_features(ev: dict, prior: list, feature_cols: list) -> dict:
     
     context_confidence = float(ev.get("context_confidence", 1.0))
     is_false_positive_regex = 1 if context_confidence < 0.5 else 0
+    violation_count = int(ev.get("violation_count", 1))
 
     beh = {
         "sender_30d_violation_count": len(prior_30d),
@@ -161,7 +162,8 @@ def compute_features(ev: dict, prior: list, feature_cols: list) -> dict:
         "internal_cc_count": internal_cc_count,
         "has_manager_cc": has_manager_cc,
         "is_false_positive_regex": is_false_positive_regex,
-        "context_confidence": round(context_confidence, 2)
+        "context_confidence": round(context_confidence, 2),
+        "violation_count": violation_count
     }
     
     # Only include behavioral features that the model actually expects

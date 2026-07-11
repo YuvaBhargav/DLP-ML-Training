@@ -44,6 +44,7 @@ with tab1:
     receiver = st.sidebar.text_input("Receiver Email", "personal@gmail.com")
     policy   = st.sidebar.text_input("DLP Policy", "ENCRYPTED")
     cc       = st.sidebar.text_input("CC (Optional)", "manager@yuva.com", help="Comma separated. Triggers business oversight rules.")
+    violation_count = st.sidebar.number_input("# Violations (Regex Matches)", min_value=1, max_value=5000, value=15, step=1)
     
     st.sidebar.markdown("---")
     st.sidebar.subheader("Payload Context")
@@ -79,6 +80,7 @@ with tab1:
                     "receiver_domain_type": "PERSONAL" if ("gmail" in receiver.lower() or "yahoo" in receiver.lower()) else "BUSINESS",
                     "dlp_policy": policy,
                     "cc": cc,
+                    "violation_count": violation_count,
                     "context_confidence": context_confidence,
                     "timestamp": datetime.now().isoformat()
                 }
