@@ -1,118 +1,95 @@
 import json
 import pandas as pd
 import numpy as np
+import argparse
+import os
+import math
 from sklearn.cluster import DBSCAN
 from sklearn.preprocessing import StandardScaler
 from collections import Counter
-import math
 
-# -----------------------------
-# 1. Load BIN_001 JSON
-# -----------------------------
-df = pd.read_json("bin_001_clustered.json",)
-
-# -----------------------------
-# 2. Feature Engineering
-# -----------------------------
-
-# Sender username
-df["sender_username"] = df["sender"].str.split("@").str[0]
-
-# Sender username length
-df["sender_username_length"] = df["sender_username"].str.len()
-
-# Shannon entropy of sender username
 def shannon_entropy(s):
     if not isinstance(s, str) or len(s) == 0:
         return 0
     probs = [n / len(s) for n in Counter(s).values()]
     return -sum(p * math.log2(p) for p in probs)
 
-df["sender_username_entropy"] = df["sender_username"].apply(shannon_entropy)
+def process_bin(bin_id):
+    bin_id_lower = bin_id.lower()
+    input_path = f"bins/{bin_id_lower}/{bin_id_lower}.jsonl"
+    
+    if not os.path.exists(input_path):
+        print(f"Error: Could not find {input_path}")
+        return
 
-# Receiver domain
-df["receiver_domain"] = df["receiver"].str.split("@").str[1]
+    print(f"--- Processing {bin_id} ---")
+    df = pd.read_json(input_path, lines=True)
 
-# Receiver domain frequency (normalized)
-domain_freq = df["receiver_domain"].value_counts(normalize=True)
-df["receiver_domain_frequency"] = df["receiver_domain"].map(domain_freq)
+    # Base feature engineering (common to all)
+    df["sender_username"] = df["sender"].str.split("@").str[0]
+    df["sender_username_length"] = df["sender_username"].str.len()
+    df["sender_username_entropy"] = df["sender_username"].apply(shannon_entropy)
+    
+    df["receiver_domain"] = df["receiver"].str.split("@").str[1]
+    domain_freq = df["receiver_domain"].value_counts(normalize=True)
+    df["receiver_domain_frequency"] = df["receiver_domain"].map(domain_freq)
 
-# Policy subtype encoding
-policy_map = {
-    "PII_PAN": 0,
-    "PII_AADHAAR": 1,
-    "PII_DL": 2
-}
-df["policy_encoded"] = df["dlp_policy"].map(policy_map)
+    feature_cols = ["sender_username_length", "sender_username_entropy", "receiver_domain_frequency"]
 
-# -----------------------------
-# 3. Final Feature Matrix
-# -----------------------------
-features = df[
-    [
-        "sender_username_length",
-        "sender_username_entropy",
-        "receiver_domain_frequency",
-        "policy_encoded"
-    ]
-].fillna(0)
+    if bin_id == "BIN_001":
+        # Policy varies
+        policy_map = {"PII_PAN": 0, "PII_AADHAAR": 1, "PII_DL": 2}
+        df["policy_encoded"] = df["dlp_policy"].map(policy_map).fillna(-1)
+        feature_cols.append("policy_encoded")
 
-# -----------------------------
-# 4. Scale Features
-# -----------------------------
-scaler = StandardScaler()
-X_scaled = scaler.fit_transform(features)
+    elif bin_id == "BIN_002":
+        # Policy is always SOURCE_CODE. Let's use CC domain frequency
+        df["cc_domain"] = df["cc"].str.split("@").str[1].fillna("none")
+        cc_domain_freq = df["cc_domain"].value_counts(normalize=True)
+        df["cc_domain_frequency"] = df["cc_domain"].map(cc_domain_freq)
+        feature_cols.append("cc_domain_frequency")
 
-# -----------------------------
-# 5. Run DBSCAN
-# -----------------------------
-dbscan = DBSCAN(
-    eps=0.5,
-    min_samples=20,
-    metric="euclidean"
-)
+    elif bin_id == "BIN_003":
+        # Policy is BU_CONTENT_G1 through G9
+        df["policy_encoded"] = df["dlp_policy"].str.extract(r'G(\d+)').astype(float).fillna(0)
+        feature_cols.append("policy_encoded")
 
-df["cluster_label"] = dbscan.fit_predict(X_scaled)
+    features = df[feature_cols].fillna(0)
 
-# -----------------------------
-# 6. Map clusters → sub-bins
-# -----------------------------
-def map_sub_bin(label):
-    if label == -1:
-        return "BIN_001_OUTLIER"
-    elif label == 0:
-        return "BIN_001_MAIN"
-    else:
-        return f"BIN_001_EDGE_{label}"
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(features)
 
-df["sub_bin_id"] = df["cluster_label"].apply(map_sub_bin)
+    dbscan = DBSCAN(eps=0.5, min_samples=20, metric="euclidean")
+    df["cluster_label"] = dbscan.fit_predict(X_scaled)
 
-# -----------------------------
-# 7. Save output
-# -----------------------------
-df.to_json("bin_001_clustered.json", orient="records", indent=2)
+    def map_sub_bin(label):
+        if label == -1:
+            return f"{bin_id}_OUTLIER"
+        elif label == 0:
+            return f"{bin_id}_MAIN"
+        else:
+            return f"{bin_id}_EDGE_{label}"
 
-# -----------------------------
-# 8. Quick sanity check
-# -----------------------------
-print(df["sub_bin_id"].value_counts())
+    df["sub_bin_id"] = df["cluster_label"].apply(map_sub_bin)
 
-# -----------------------------
-# Merge rare EDGE clusters
-# -----------------------------
+    sub_bin_counts = df["sub_bin_id"].value_counts()
+    rare_edges = sub_bin_counts[
+        (sub_bin_counts < 50) &
+        (sub_bin_counts.index.str.startswith(f"{bin_id}_EDGE_"))
+    ].index.tolist()
 
-sub_bin_counts = df["sub_bin_id"].value_counts()
+    df.loc[df["sub_bin_id"].isin(rare_edges), "sub_bin_id"] = f"{bin_id}_EDGE_RARE"
 
-rare_edges = sub_bin_counts[
-    (sub_bin_counts < 50) &
-    (sub_bin_counts.index.str.startswith("BIN_001_EDGE_"))
-].index.tolist()
+    print("Sub-bins generated:")
+    print(df["sub_bin_id"].value_counts())
 
-df.loc[df["sub_bin_id"].isin(rare_edges), "sub_bin_id"] = "BIN_001_EDGE_RARE"
+    # Save to clustered json (Note: changing to .jsonl to maintain consistency with timestamp output)
+    output_path = f"bins/{bin_id_lower}/{bin_id_lower}_clustered_final.json"
+    df.to_json(output_path, orient="records", indent=2)
+    print(f"Saved -> {output_path}")
 
-print("After merging rare edges:")
-print(df["sub_bin_id"].value_counts())
-
-# Save final version
-df.to_json("bins/bin_001_clustered_final.json", orient="records", indent=2)
-
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--bin", type=str, required=True, help="e.g. BIN_001, BIN_002")
+    args = parser.parse_args()
+    process_bin(args.bin)

@@ -1,0 +1,3 @@
+{"bin_id": "BIN_001", "sender":"user001@yuva.com","receiver":"victim@gmail.com","dlp_policy":"PII_PAN","timestamp":"2026-01-15T14:32:00"}
+{"bin_id": "BIN_002", "sender":"dev001@yuva.com","receiver":"partner@vendor.com","cc":"mgr@yuva.com", "dlp_policy":"SOURCE_CODE","timestamp":"2026-01-15T15:10:00"}
+{"bin_id": "BIN_003", "sender":"contractor99@yuvaext.com","receiver":"self@yahoo.com","dlp_policy":"BU_CONTENT_G4","timestamp":"2026-01-15T23:47:00"}

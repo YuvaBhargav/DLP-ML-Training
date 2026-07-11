@@ -1,0 +1,8 @@
+{"sender":"user001@yuva.com","receiver":"victim@gmail.com","dlp_policy":"PII_PAN","timestamp":"2026-01-15T14:32:00"}
+{"sender":"user001@yuva.com","receiver":"other@yahoo.com","dlp_policy":"PII_AADHAAR","timestamp":"2026-01-15T15:10:00"}
+{"sender":"user001@yuva.com","receiver":"third@gmail.com","dlp_policy":"PII_DL","timestamp":"2026-01-15T23:47:00"}
+{"sender":"user045@yuva.com","receiver":"alice@gmail.com","dlp_policy":"PII_PAN","timestamp":"2026-01-16T09:05:00"}
+{"sender":"new_employee@yuva.com","receiver":"personal@gmail.com","dlp_policy":"PII_PAN","timestamp":"2026-01-16T10:00:00"}
+{"sender":"user200@yuva.com","receiver":"bob@yahoo.com","dlp_policy":"PII_AADHAAR","timestamp":"2026-01-16T22:15:00"}
+{"sender":"user001@yuva.com","receiver":"fourth@gmail.com","dlp_policy":"PII_PAN","timestamp":"2026-01-17T02:30:00"}
+{"sender":"user090@yuva.com","receiver":"carol@gmail.com","dlp_policy":"PII_DL","timestamp":"2026-01-18T11:00:00"}

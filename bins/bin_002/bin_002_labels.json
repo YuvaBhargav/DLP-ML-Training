@@ -1,0 +1,23 @@
+[
+  {
+    "bin_id": "BIN_002",
+    "sub_bin_id": "BIN_002_MAIN",
+    "severity": "HIGH",
+    "allowed_behavior": false,
+    "auto_close_eligible": false,
+    "policy_alignment": "VIOLATION"
+  },
+  {
+    "bin_id": "BIN_002",
+    "sub_bin_id": "BIN_002_EDGE_1",
+    "severity": "CRITICAL",
+    "allowed_behavior": false,
+    "auto_close_eligible": false,
+    "policy_alignment": "VIOLATION"
+  },
+  {
+    "bin_id": "BIN_002",
+    "severity": "HIGH",
+    "policy_alignment": "VIOLATION"
+  }
+]
