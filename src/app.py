@@ -1,6 +1,5 @@
 import sys, os, json, tempfile
 import pandas as pd
-import requests
 from datetime import datetime, timezone
 import streamlit as st
 
@@ -32,59 +31,6 @@ def get_model_and_baseline(bin_id):
         return load_bin_models(bin_id)
     except Exception as e:
         return None
-
-def get_ollama_model():
-    try:
-        response = requests.get("http://127.0.0.1:11434/api/tags", timeout=5)
-        if response.status_code == 200:
-            models = response.json().get("models", [])
-            names = [m["name"] for m in models]
-            # Try to look for common Llama3 models first
-            for target in ["llama3.1:latest", "llama3.1", "llama3:latest", "llama3"]:
-                for name in names:
-                    if name.lower() == target:
-                        return name
-            # Check if any model name contains 'llama'
-            for name in names:
-                if "llama" in name.lower():
-                    return name
-            # If not, return the first available model
-            if names:
-                return names[0]
-    except Exception:
-        pass
-    return "llama3"
-
-def get_llm_reasoning(feats, severity):
-    prompt = f"""You are an expert SOC Analyst triage AI. Explain in 2-3 concise sentences why the following Data Loss Prevention (DLP) incident was assigned a severity of {severity} based on its contextual features.
-
-Focus heavily on contextual factors like:
-- violation_count: number of sensitive matches
-- is_ftc: 1 if sender is a contractor
-- has_manager_cc: 1 if a manager is CC'd
-- is_personal_recipient: 1 if sending to gmail/yahoo
-- is_encrypted_payload: 1 if the policy is ENCRYPTED
-
-Features:
-{json.dumps(feats, indent=2)}
-"""
-    model_name = get_ollama_model()
-    try:
-        response = requests.post(
-            "http://127.0.0.1:11434/api/generate",
-            json={
-                "model": model_name,
-                "prompt": prompt,
-                "stream": False
-            },
-            timeout=40
-        )
-        if response.status_code == 200:
-            return response.json().get("response", "No response generated.")
-        else:
-            return f"Error: LLM returned status {response.status_code} when requesting model '{model_name}'"
-    except requests.exceptions.RequestException as e:
-        return f"⚠️ **Local LLM not reachable or timed out.** Please ensure Ollama is running (`ollama run {model_name}`) to enable AI Reasoning."
 
 # ─────────────────────────────────────────────
 # FEEDBACK HELPER
@@ -226,10 +172,6 @@ with tab1:
                     st.json(feats)
                     
                 st.markdown("---")
-                st.markdown("### 🧠 AI Analyst Reasoning")
-                with st.spinner("Generating plain-English reasoning via Local LLM..."):
-                    reasoning = get_llm_reasoning(feats, severity)
-                    st.info(reasoning)
 
                 # ── Store prediction in session state so the feedback form persists ──
                 st.session_state.last_pred = {
