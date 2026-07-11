@@ -7,6 +7,11 @@ import streamlit as st
 # Setup absolute path to import from src correctly
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from classify import load_bin_models, compute_features, DummyModel, classify_batch
+from retrain_from_feedback import retrain_from_feedback as run_retrain
+
+# ─── Paths ─────────────────────────────────────────────────────────────────
+BASE_DIR     = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+FEEDBACK_LOG = os.path.join(BASE_DIR, "feedback_log.jsonl")
 
 # ─────────────────────────────────────────────
 # PAGE CONFIG
@@ -28,6 +33,28 @@ def get_model_and_baseline(bin_id):
     except Exception as e:
         return None
 
+def get_ollama_model():
+    try:
+        response = requests.get("http://127.0.0.1:11434/api/tags", timeout=5)
+        if response.status_code == 200:
+            models = response.json().get("models", [])
+            names = [m["name"] for m in models]
+            # Try to look for common Llama3 models first
+            for target in ["llama3.1:latest", "llama3.1", "llama3:latest", "llama3"]:
+                for name in names:
+                    if name.lower() == target:
+                        return name
+            # Check if any model name contains 'llama'
+            for name in names:
+                if "llama" in name.lower():
+                    return name
+            # If not, return the first available model
+            if names:
+                return names[0]
+    except Exception:
+        pass
+    return "llama3"
+
 def get_llm_reasoning(feats, severity):
     prompt = f"""You are an expert SOC Analyst triage AI. Explain in 2-3 concise sentences why the following Data Loss Prevention (DLP) incident was assigned a severity of {severity} based on its contextual features.
 
@@ -41,22 +68,47 @@ Focus heavily on contextual factors like:
 Features:
 {json.dumps(feats, indent=2)}
 """
+    model_name = get_ollama_model()
     try:
         response = requests.post(
-            "http://localhost:11434/api/generate",
+            "http://127.0.0.1:11434/api/generate",
             json={
-                "model": "llama3",
+                "model": model_name,
                 "prompt": prompt,
                 "stream": False
             },
-            timeout=10
+            timeout=40
         )
         if response.status_code == 200:
             return response.json().get("response", "No response generated.")
         else:
-            return f"Error: LLM returned status {response.status_code}"
+            return f"Error: LLM returned status {response.status_code} when requesting model '{model_name}'"
     except requests.exceptions.RequestException as e:
-        return "⚠️ **Local LLM not reachable.** Please ensure Ollama is running (`ollama run llama3`) to enable AI Reasoning."
+        return f"⚠️ **Local LLM not reachable or timed out.** Please ensure Ollama is running (`ollama run {model_name}`) to enable AI Reasoning."
+
+# ─────────────────────────────────────────────
+# FEEDBACK HELPER
+# ─────────────────────────────────────────────
+def save_feedback(bin_id, sender, receiver, policy, model_prediction,
+                  model_confidence, analyst_label, was_correct, feats, notes=""):
+    """Append one analyst feedback record to feedback_log.jsonl."""
+    # Convert any numpy scalars to native Python for JSON serialisation
+    serialisable_feats = {k: (v.item() if hasattr(v, "item") else v) for k, v in feats.items()}
+    entry = {
+        "timestamp":        datetime.now().isoformat(),
+        "bin_id":           bin_id,
+        "sender":           sender,
+        "receiver":         receiver,
+        "dlp_policy":       policy,
+        "model_prediction": model_prediction,
+        "model_confidence": model_confidence,
+        "analyst_label":    analyst_label,
+        "was_correct":      was_correct,
+        "notes":            notes,
+        "features":         serialisable_feats,
+    }
+    with open(FEEDBACK_LOG, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry) + "\n")
 
 # ─────────────────────────────────────────────
 # UI LAYOUT
@@ -64,7 +116,7 @@ Features:
 st.title("🛡️ Email DLP Severity Predictor")
 st.markdown("Interactive PoC leveraging the **Phase 2 Multi-Bin Architecture**.")
 
-tab1, tab2 = st.tabs(["Single Incident Analyzer", "Batch File Processor"])
+tab1, tab2, tab3 = st.tabs(["🔍 Single Incident Analyzer", "📦 Batch File Processor", "📋 Analyst Feedback"])
 
 # ─────────────────────────────────────────────
 # TAB 1: SINGLE INCIDENT ANALYZER
@@ -179,6 +231,70 @@ with tab1:
                     reasoning = get_llm_reasoning(feats, severity)
                     st.info(reasoning)
 
+                # ── Store prediction in session state so the feedback form persists ──
+                st.session_state.last_pred = {
+                    "bin_id":     bin_id,
+                    "sender":     sender,
+                    "receiver":   receiver,
+                    "policy":     policy,
+                    "severity":   severity,
+                    "confidence": confidence,
+                    "feats":      feats,
+                }
+                st.session_state.feedback_submitted = False
+
+    # ── Analyst Feedback Form (persists via session_state) ──────────────────
+    if "last_pred" in st.session_state:
+        pred = st.session_state.last_pred
+
+        if st.session_state.get("feedback_submitted", False):
+            st.success("✅ Feedback submitted! This correction will be applied on next retrain.")
+        else:
+            st.markdown("---")
+            st.markdown("### 📋 Submit Analyst Feedback")
+            col_fb1, col_fb2 = st.columns([3, 1])
+            with col_fb1:
+                fb_choice = st.radio(
+                    f"Model predicted **{pred['severity']}** with **{pred['confidence']}%** confidence. Is this correct?",
+                    ["✅ Confirmed Correct", "⚠️ Override Severity"],
+                    horizontal=True,
+                    key="fb_radio"
+                )
+            with col_fb2:
+                if fb_choice == "⚠️ Override Severity":
+                    override_sev = st.selectbox(
+                        "Correct Severity",
+                        [s for s in ["MEDIUM", "HIGH", "CRITICAL"] if s != pred["severity"]],
+                        key="fb_override"
+                    )
+                else:
+                    override_sev = pred["severity"]
+                    st.caption(f"Label: **{pred['severity']}**")
+
+            notes = st.text_area(
+                "Analyst Notes (optional)",
+                height=60,
+                key="fb_notes",
+                placeholder="e.g. Confirmed FP — user had manager approval for this transfer"
+            )
+
+            if st.button("📨 Submit Feedback", type="primary", key="fb_submit"):
+                was_correct = fb_choice.startswith("✅")
+                save_feedback(
+                    bin_id=pred["bin_id"],
+                    sender=pred["sender"],
+                    receiver=pred["receiver"],
+                    policy=pred["policy"],
+                    model_prediction=pred["severity"],
+                    model_confidence=pred["confidence"],
+                    analyst_label=override_sev,
+                    was_correct=was_correct,
+                    feats=pred["feats"],
+                    notes=notes
+                )
+                st.session_state.feedback_submitted = True
+                st.rerun()
+
 # ─────────────────────────────────────────────
 # TAB 2: BATCH FILE PROCESSOR
 # ─────────────────────────────────────────────
@@ -230,3 +346,90 @@ with tab2:
                         file_name="classified_results.jsonl",
                         mime="application/json"
                     )
+
+# ─────────────────────────────────────────────
+# TAB 3: ANALYST FEEDBACK
+# ─────────────────────────────────────────────
+with tab3:
+    st.markdown("### 📋 Analyst Feedback Log")
+    st.caption("All analyst corrections submitted from the Single Incident Analyzer. Use the Retrain buttons to bake corrections into the models.")
+
+    # Load feedback entries
+    feedback_entries = []
+    if os.path.exists(FEEDBACK_LOG):
+        with open(FEEDBACK_LOG, "r", encoding="utf-8") as _f:
+            for _line in _f:
+                _line = _line.strip()
+                if _line:
+                    try:
+                        feedback_entries.append(json.loads(_line))
+                    except Exception:
+                        pass
+
+    if not feedback_entries:
+        st.info("📢 No feedback submitted yet. Analyze incidents in the **🔍 Single Incident Analyzer** tab and submit corrections to start building the feedback log.")
+    else:
+        total     = len(feedback_entries)
+        overrides = [e for e in feedback_entries if not e.get("was_correct", True)]
+        confirmed = total - len(overrides)
+        bins_with_overrides = sorted({e["bin_id"] for e in overrides})
+
+        # Summary metrics
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("📊 Total Feedback",          total)
+        m2.metric("✅ Confirmed Correct",          confirmed)
+        m3.metric("⚠️ Override Corrections",      len(overrides))
+        m4.metric("📦 Bins with Corrections",    len(bins_with_overrides))
+
+        st.markdown("---")
+
+        # Retrain buttons
+        if overrides:
+            st.markdown("#### 🔁 Retrain Models from Analyst Feedback")
+            st.caption(
+                f"Each of the **{len(overrides)} override(s)** is weighted **×3** in training so analyst "
+                "judgement takes precedence over synthetic baseline data. Original model artifacts will be overwritten."
+            )
+            retrain_cols = st.columns(max(len(bins_with_overrides), 1))
+            for idx, bin_id_r in enumerate(bins_with_overrides):
+                n_bin_overrides = sum(1 for e in overrides if e["bin_id"] == bin_id_r)
+                with retrain_cols[idx]:
+                    if st.button(
+                        f"🔁 Retrain {bin_id_r}  ({n_bin_overrides} correction(s))",
+                        type="primary",
+                        key=f"retrain_{bin_id_r}",
+                        use_container_width=True
+                    ):
+                        with st.spinner(f"Retraining {bin_id_r} with {n_bin_overrides} analyst correction(s) — this may take ~30 s..."):
+                            try:
+                                result = run_retrain(bin_id_r)
+                                # Invalidate the cached model so the next prediction loads the new one
+                                get_model_and_baseline.clear()
+                                st.success(f"✅ {bin_id_r} retrained successfully! New model is active.")
+                                with st.expander("📊 View Training Details"):
+                                    for log_line in result.get("log", []):
+                                        st.text(log_line)
+                                col_a, col_b, col_c = st.columns(3)
+                                col_a.metric("New Accuracy",          f"{result.get('accuracy', 0):.2f}%")
+                                col_b.metric("High-Severity FN Rate", f"{result.get('fn_rate', 0):.2f}%")
+                                col_c.metric("Best Model",            result.get("model_name", "N/A"))
+                            except Exception as exc:
+                                st.error(f"Retraining failed: {exc}")
+
+        st.markdown("---")
+        st.markdown("#### 📄 Feedback History (most recent first)")
+
+        display_rows = []
+        for e in reversed(feedback_entries):
+            display_rows.append({
+                "Timestamp":     e.get("timestamp", "")[:19].replace("T", " "),
+                "Bin":           e.get("bin_id", ""),
+                "Sender":        e.get("sender", ""),
+                "Policy":        e.get("dlp_policy", ""),
+                "Model Predicted": e.get("model_prediction", ""),
+                "Analyst Label": e.get("analyst_label", ""),
+                "Correct?": "✅" if e.get("was_correct", True) else "❌",
+                "Notes":         e.get("notes", ""),
+            })
+        df_fb = pd.DataFrame(display_rows)
+        st.dataframe(df_fb, use_container_width=True, hide_index=True)
