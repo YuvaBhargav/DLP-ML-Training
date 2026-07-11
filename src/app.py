@@ -1,5 +1,6 @@
 import sys, os, json, tempfile
 import pandas as pd
+import requests
 from datetime import datetime, timezone
 import streamlit as st
 
@@ -26,6 +27,36 @@ def get_model_and_baseline(bin_id):
         return load_bin_models(bin_id)
     except Exception as e:
         return None
+
+def get_llm_reasoning(feats, severity):
+    prompt = f"""You are an expert SOC Analyst triage AI. Explain in 2-3 concise sentences why the following Data Loss Prevention (DLP) incident was assigned a severity of {severity} based on its contextual features.
+
+Focus heavily on contextual factors like:
+- violation_count: number of sensitive matches
+- is_ftc: 1 if sender is a contractor
+- has_manager_cc: 1 if a manager is CC'd
+- is_personal_recipient: 1 if sending to gmail/yahoo
+- is_encrypted_payload: 1 if the policy is ENCRYPTED
+
+Features:
+{json.dumps(feats, indent=2)}
+"""
+    try:
+        response = requests.post(
+            "http://localhost:11434/api/generate",
+            json={
+                "model": "llama3",
+                "prompt": prompt,
+                "stream": False
+            },
+            timeout=10
+        )
+        if response.status_code == 200:
+            return response.json().get("response", "No response generated.")
+        else:
+            return f"Error: LLM returned status {response.status_code}"
+    except requests.exceptions.RequestException as e:
+        return "⚠️ **Local LLM not reachable.** Please ensure Ollama is running (`ollama run llama3`) to enable AI Reasoning."
 
 # ─────────────────────────────────────────────
 # UI LAYOUT
@@ -139,9 +170,14 @@ with tab1:
                     
                 with col2:
                     st.markdown("### 🧮 Model Features")
-                    st.caption("The exact 14-dimensional feature vector fed to the ML model.")
+                    st.caption("The exact feature vector fed to the ML model.")
                     st.json(feats)
-
+                    
+                st.markdown("---")
+                st.markdown("### 🧠 AI Analyst Reasoning")
+                with st.spinner("Generating plain-English reasoning via Local LLM..."):
+                    reasoning = get_llm_reasoning(feats, severity)
+                    st.info(reasoning)
 
 # ─────────────────────────────────────────────
 # TAB 2: BATCH FILE PROCESSOR
