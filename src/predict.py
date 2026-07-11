@@ -28,7 +28,7 @@ def predict(bin_id: str, sender: str, receiver: str, dlp_policy: str, cc: str = 
         "receiver": receiver,
         "dlp_policy": dlp_policy,
         "cc": cc,
-        "timestamp": datetime.now(timezone.utc).isoformat()
+        "timestamp": datetime.now().isoformat()
     }
     
     try:
