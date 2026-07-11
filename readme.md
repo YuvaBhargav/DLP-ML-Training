@@ -27,6 +27,7 @@
 20. [What Production Would Need](#20-what-production-would-need)
 21. [Phase 2 — Multi-Bin Expansion](#21-phase-2--multi-bin-expansion)
 22. [Phase 3 — Netskope Ingestion, Local LLM Integration & Rule Refinements](#22-phase-3--netskope-ingestion-local-llm-integration--rule-refinements)
+23. [Phase 4 — Human-in-the-Loop Feedback & Auto-Retraining](#23-phase-4--human-in-the-loop-feedback--auto-retraining)
 
 ---
 
@@ -1063,3 +1064,242 @@ This phase introduced ingestion adapters for enterprise logs (Netskope CSV forma
 ---
 
 *Last updated: Phase 3 (Netskope Ingestion, Local LLM Integration & Rule Refinements) complete.*
+
+---
+
+## 23. Phase 4 — Human-in-the-Loop Feedback & Auto-Retraining
+
+This phase closes the human-analyst loop. Analysts can now confirm or override any model prediction directly in the Streamlit UI. Every correction is persisted to a structured log file. A dedicated tab shows the full correction history with one-click retraining buttons that merge analyst corrections into the training data and immediately activate the new model — no terminal or restart required.
+
+---
+
+### 1. Feedback Storage — `feedback_log.jsonl`
+
+Every analyst interaction (confirmation **or** correction) is appended as a single JSON line to `feedback_log.jsonl` at the project root.
+
+**Schema of each entry:**
+
+```json
+{
+  "timestamp":        "2026-07-11T22:49:00",
+  "bin_id":           "BIN_001",
+  "sender":           "contractor@yuvaext.com",
+  "receiver":         "personal@gmail.com",
+  "dlp_policy":       "ENCRYPTED",
+  "model_prediction": "CRITICAL",
+  "model_confidence": 100.0,
+  "analyst_label":    "HIGH",
+  "was_correct":      false,
+  "notes":            "Manager had approved this transfer in advance.",
+  "features": {
+    "sender_30d_violation_count": 3,
+    "sender_7d_violation_count":  1,
+    "is_ftc":                     1,
+    "is_encrypted_payload":       1,
+    "is_personal_recipient":      1,
+    "has_manager_cc":             0,
+    "violation_count":            1,
+    ...all 11+ features...
+  }
+}
+```
+
+| Field | Description |
+|---|---|
+| `was_correct` | `true` if analyst confirmed the model's label; `false` if they overrode it |
+| `analyst_label` | The ground-truth label the analyst assigned (same as `model_prediction` when `was_correct=true`) |
+| `features` | Complete feature vector used for that prediction — used directly for retraining |
+| `notes` | Free-text analyst explanation (optional, never used by model) |
+
+**Only `was_correct=false` entries are used during retraining.** Confirmed-correct entries are logged for audit purposes but not fed back into the training loop (the original enriched data already contains those patterns).
+
+---
+
+### 2. `save_feedback()` — `src/app.py`
+
+```python
+def save_feedback(bin_id, sender, receiver, policy, model_prediction,
+                  model_confidence, analyst_label, was_correct, feats, notes=""):
+```
+
+- Converts any **numpy scalar** types in `feats` to native Python (`v.item()`) so the dict serialises cleanly to JSON.
+- Appends one line to `feedback_log.jsonl` in append mode — never overwrites, never holds a lock between writes.
+- Called immediately when the analyst clicks **📨 Submit Feedback** in the UI.
+
+---
+
+### 3. Analyst Feedback Form — Tab 1 (`src/app.py`)
+
+After every successful prediction in the **🔍 Single Incident Analyzer** tab, a feedback form appears below the AI Reasoning section.
+
+**Session state design:** The prediction details (`bin_id`, `severity`, `confidence`, full `feats` dict) are stored in `st.session_state.last_pred` the moment a result is computed. This ensures the form persists across Streamlit reruns (e.g., when the user interacts with the radio button) without re-running the ML pipeline.
+
+**Form layout:**
+- **Radio button** (horizontal): `✅ Confirmed Correct` | `⚠️ Override Severity`
+- **Selectbox** (only visible on override): Shows only the two severities that are **not** the current prediction — prevents accidentally confirming the same label as an override.
+- **Text area**: Optional analyst notes (placeholder gives examples of what to write).
+- **Submit button**: Calls `save_feedback()` → sets `st.session_state.feedback_submitted = True` → calls `st.rerun()` to refresh the form to a confirmation message.
+
+---
+
+### 4. Analyst Feedback Tab — Tab 3 (`src/app.py`)
+
+A completely new **📋 Analyst Feedback** tab with three sections:
+
+#### 4a. Summary Metrics (4 columns)
+```
+📊 Total Feedback  |  ✅ Confirmed Correct  |  ⚠️ Override Corrections  |  📦 Bins with Corrections
+```
+
+#### 4b. Retrain Buttons
+One **🔁 Retrain BIN_XXX (N corrections)** button is rendered per bin that has at least one override. Each button:
+1. Calls `run_retrain(bin_id_r)` (the imported `retrain_from_feedback` function)
+2. Wraps the call in `st.spinner` with a realistic time estimate
+3. On success: calls `get_model_and_baseline.clear()` to **invalidate the `@st.cache_resource` cache** — this forces the next prediction to load the freshly trained model from disk
+4. Expands a **📊 View Training Details** panel showing per-model accuracy and FN rate logs
+5. Displays 3 metric cards: **New Accuracy**, **High-Severity FN Rate**, **Best Model**
+
+#### 4c. Feedback History Table
+A `st.dataframe` (full-width, hidden index) showing all feedback entries in **reverse chronological order** (most recent first) with columns:
+
+| Column | Source |
+|---|---|
+| Timestamp | `entry["timestamp"][:19]` formatted as `YYYY-MM-DD HH:MM:SS` |
+| Bin | `entry["bin_id"]` |
+| Sender | `entry["sender"]` |
+| Policy | `entry["dlp_policy"]` |
+| Model Predicted | `entry["model_prediction"]` |
+| Analyst Label | `entry["analyst_label"]` |
+| Correct? | `✅` or `❌` |
+| Notes | `entry["notes"]` |
+
+---
+
+### 5. `src/retrain_from_feedback.py` — Retraining Engine
+
+A self-contained module callable from the Streamlit UI **or** the CLI:
+
+```powershell
+venv\Scripts\python src\retrain_from_feedback.py --bin BIN_001
+```
+
+#### `retrain_from_feedback(bin_id)` — Step by Step
+
+**Step 1: Load feature list**
+```python
+feat_path = "models/bin_001/feature_list.json"
+feature_cols = json.load(f)  # e.g. ["sender_30d_violation_count", "is_ftc", ...]
+```
+This guarantees the feedback rows use the **exact same column order** the scaler and model were originally fitted on.
+
+**Step 2: Load original enriched training data**
+```python
+enriched_path = "bins/bin_001/bin_001_enriched.jsonl"  # e.g. 6,000 rows
+df_train = df_original[ALL_FEATURES + ["severity"]].fillna(0)
+```
+
+**Step 3: Load and weight analyst corrections**
+```python
+FEEDBACK_WEIGHT = 3
+# Only was_correct=False entries are used
+if feedback_rows:
+    df_feedback = pd.DataFrame(feedback_rows * FEEDBACK_WEIGHT)  # 3x duplication
+    df_train = pd.concat([df_train, df_feedback], ignore_index=True)
+```
+
+**Why ×3?** Each correction row is duplicated 3 times before merging. This means a dataset of 6,000 original rows + 10 analyst corrections becomes 6,030 rows where the analyst's signal has ~5% influence. If the analyst provides 100 corrections they have ~33% weight. This is a deliberate soft-weighting rather than hard override — the model still generalises from the baseline but steers toward analyst judgement.
+
+**Step 4: Encode labels**
+```python
+le = LabelEncoder()
+y_enc = le.fit_transform(y)  # Refitted on the combined dataset
+```
+The `LabelEncoder` is **refitted** on the combined dataset. This handles the edge case where the original single-class bin (e.g., BIN_003 was 100% CRITICAL) gains a new class from analyst corrections.
+
+**Step 5: Train 3 models**
+
+| Model | Config |
+|---|---|
+| Logistic Regression | `max_iter=1000, class_weight="balanced"` |
+| Random Forest | `n_estimators=200, class_weight="balanced", n_jobs=-1` |
+| Gradient Boosting | `n_estimators=200, max_depth=4` |
+
+Same 80/20 stratified split and StandardScaler as the original `train.py`.
+
+**Step 6: Select best model**
+```python
+# Primary: lowest high-severity FN rate. Tie-break: highest accuracy.
+best_name = min(results, key=lambda n: (results[n]["fn_rate"], -results[n]["acc"]))
+```
+
+**Step 7: Overwrite artifacts**
+```
+models/bin_001/severity_model.joblib  ← new model
+models/bin_001/scaler.joblib          ← new scaler (fitted on expanded data)
+models/bin_001/label_encoder.joblib   ← new encoder (may have new classes)
+models/bin_001/feature_list.json      ← same feature list (preserved)
+```
+
+**Step 8: Cache invalidation (UI only)**
+```python
+get_model_and_baseline.clear()  # Clears Streamlit @st.cache_resource
+```
+The next prediction in Tab 1 will call `load_bin_models()` fresh from disk, loading the new `.joblib` files. No app restart required.
+
+**Return value:**
+```python
+{
+    "bin_id":     "BIN_001",
+    "n_feedback": 5,            # corrections applied
+    "model_name": "Gradient Boosting",
+    "accuracy":   99.87,
+    "fn_rate":    0.0,
+    "log":        [...]         # per-step log strings shown in expander
+}
+```
+
+---
+
+### 6. Ollama LLM Fixes (also in Phase 3/4 boundary)
+
+Two bugs were identified and fixed in `get_llm_reasoning()`:
+
+#### Bug 1: 404 from hardcoded model name
+The original code sent `"model": "llama3"`. If the local Ollama installation has `llama3.1:latest` (a different tag), the API returns `404 model not found`.
+
+**Fix:** Added `get_ollama_model()` helper that:
+1. Queries `GET /api/tags` to get the list of installed models
+2. Tries a priority list: `llama3.1:latest` → `llama3.1` → `llama3:latest` → `llama3`
+3. Falls back to any model with `"llama"` in the name
+4. Finally falls back to whichever model is first in the list
+
+#### Bug 2: Connection refused / timeout on Windows
+On Windows, `localhost` can resolve to the IPv6 loopback `::1` while Ollama only listens on IPv4 `127.0.0.1`, causing `ConnectionRefusedError`.
+
+**Fix:** Changed all Ollama URLs from `http://localhost:11434` to `http://127.0.0.1:11434`.
+
+Additionally, the 10-second request timeout was increased to **40 seconds** because on the first request Ollama needs to load the 8B parameter model from disk into GPU/CPU RAM, which routinely takes 15–35 seconds.
+
+---
+
+### 7. Known Limitation: Streamlit Cloud Ephemeral Storage
+
+When deployed to **Streamlit Community Cloud** (which clones from GitHub and runs in an ephemeral container), all file writes at runtime — `feedback_log.jsonl` and retrained `.joblib` files — exist **only in container RAM** and are lost when:
+- The app goes to sleep after inactivity
+- The app is redeployed
+- The container is restarted by the platform
+
+**Mitigation for full production use:**
+
+| Option | Mechanism |
+|---|---|
+| **Git push after retrain** | Use PyGitHub with a PAT stored in Streamlit Secrets to commit new `.joblib` files back to the repo after every retrain |
+| **External model store** | Store models in Hugging Face Hub, AWS S3, or GCS; load by URL at startup |
+| **Persistent feedback DB** | Write `feedback_log` rows to Supabase, Firebase, or a hosted PostgreSQL instead of a local JSONL file |
+| **GitHub Actions trigger** | Push a `feedback_log.jsonl` update to the repo, which triggers a CI workflow that retrains and commits model artifacts |
+
+This limitation does **not** affect local execution (`streamlit run src/app.py`) where all writes are permanent.
+
+---
+
+*Last updated: Phase 4 (Human-in-the-Loop Feedback & Auto-Retraining) complete.*
