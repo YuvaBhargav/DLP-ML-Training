@@ -40,15 +40,13 @@ tab1, tab2 = st.tabs(["Single Incident Analyzer", "Batch File Processor"])
 # ─────────────────────────────────────────────
 with tab1:
     st.sidebar.header("Incident Details")
-    sender   = st.sidebar.text_input("Sender Email", "user001@yuva.com")
-    sender_type = st.sidebar.selectbox("Sender Type", ["FTE", "FTC"])
+    sender   = st.sidebar.text_input("Sender Email", "contractor@yuvaext.com")
     receiver = st.sidebar.text_input("Receiver Email", "personal@gmail.com")
-    policy   = st.sidebar.text_input("DLP Policy", "PII_PAN")
+    policy   = st.sidebar.text_input("DLP Policy", "ENCRYPTED")
     cc       = st.sidebar.text_input("CC (Optional)", "manager@yuva.com", help="Comma separated. Triggers business oversight rules.")
     
     st.sidebar.markdown("---")
     st.sidebar.subheader("Payload Context")
-    is_encrypted = st.sidebar.checkbox("Is Payload Encrypted?", value=False)
     context_confidence = st.sidebar.slider("Regex Context Confidence", 0.0, 1.0, 1.0, 0.1, help="<0.5 marks as contextual False Positive (e.g. UTR detected as Aadhaar)")
     
     analyze_btn = st.sidebar.button("Analyze Incident", type="primary", use_container_width=True)
@@ -77,12 +75,10 @@ with tab1:
                 ev = {
                     "bin_id": bin_id,
                     "sender": sender,
-                    "sender_type": sender_type,
                     "receiver": receiver,
                     "receiver_domain_type": "PERSONAL" if ("gmail" in receiver.lower() or "yahoo" in receiver.lower()) else "BUSINESS",
                     "dlp_policy": policy,
                     "cc": cc,
-                    "is_encrypted": is_encrypted,
                     "context_confidence": context_confidence,
                     "timestamp": datetime.now().isoformat()
                 }

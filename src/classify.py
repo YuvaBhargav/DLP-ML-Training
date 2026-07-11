@@ -131,8 +131,8 @@ def compute_features(ev: dict, prior: list, feature_cols: list) -> dict:
         days_since = (ts - last_ts).total_seconds() / 86400.0
 
     # New Production Base Features
-    is_ftc = 1 if ev.get("sender_type", "FTE") == "FTC" else 0
-    is_encrypted_payload = 1 if ev.get("is_encrypted", False) else 0
+    is_ftc = 1 if "@yuvaext" in ev.get("sender", "").lower() else 0
+    is_encrypted_payload = 1 if ev.get("dlp_policy", "").upper() == "ENCRYPTED" else 0
     is_personal_recipient = 1 if ev.get("receiver_domain_type", "PERSONAL") == "PERSONAL" else 0
     
     cc_raw = ev.get("cc", "")

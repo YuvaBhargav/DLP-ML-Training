@@ -82,8 +82,8 @@ def process_bin(bin_id):
         is_after_hours = 1 if (hour < 8 or hour >= 18) else 0
 
         # New Production Base Features
-        is_ftc = 1 if ev.get("sender_type", "FTE") == "FTC" else 0
-        is_encrypted_payload = 1 if ev.get("is_encrypted", False) else 0
+        is_ftc = 1 if "@yuvaext" in sender.lower() else 0
+        is_encrypted_payload = 1 if policy.upper() == "ENCRYPTED" else 0
         is_personal_recipient = 1 if ev.get("receiver_domain_type", "PERSONAL") == "PERSONAL" else 0
         
         cc_raw = ev.get("cc", "")
@@ -127,29 +127,29 @@ def process_bin(bin_id):
         if is_false_positive_regex:
             sev = "MEDIUM" # (Low/No alert)
         else:
-            # Scenario 4: Encrypted payload -> HIGH
+            # Scenario 4: Encrypted payload -> CRITICAL
             if is_encrypted_payload:
-                sev = "HIGH"
-            
-            # Scenario 3: >= 2 internal persons in CC -> MEDIUM
-            if internal_cc_count >= 2:
-                sev = "MEDIUM"
-                
-            # Sender Scenario: FTC sending externally -> CRITICAL
-            if is_ftc and is_personal_recipient:
                 sev = "CRITICAL"
-                
-            # Receiver Scenarios
-            if not is_personal_recipient:
-                # Scenario 2: Vendor/Business domain -> LOW/MEDIUM (not raised)
-                if has_manager_cc:
-                    sev = "MEDIUM"
-                elif sev == "CRITICAL":
-                    sev = "HIGH"
             else:
-                # Scenario 1: Personal domain -> HIGH
-                if sev == "MEDIUM":
-                    sev = "HIGH"
+                # Scenario 3: >= 2 internal persons in CC -> MEDIUM
+                if internal_cc_count >= 2:
+                    sev = "MEDIUM"
+                    
+                # Sender Scenario: FTC sending externally -> CRITICAL
+                if is_ftc and is_personal_recipient:
+                    sev = "CRITICAL"
+                    
+                # Receiver Scenarios
+                if not is_personal_recipient:
+                    # Scenario 2: Vendor/Business domain -> LOW/MEDIUM (not raised)
+                    if has_manager_cc:
+                        sev = "MEDIUM"
+                    elif sev == "CRITICAL":
+                        sev = "HIGH"
+                else:
+                    # Scenario 1: Personal domain -> HIGH
+                    if sev == "MEDIUM":
+                        sev = "HIGH"
                 
         # Existing Behavioral Escalations (Volume spikes overrule standard rules)
         if sev == "HIGH":
