@@ -1,4 +1,3 @@
-cat <<EOF > .gitignore
 # Python
 venv/
 __pycache__/
@@ -12,14 +11,13 @@ __pycache__/
 # Environment
 .env
 
-# Data
-data/raw/
-data/processed/
-
-# Logs
-*.log
-
 # OS
 .DS_Store
 Thumbs.db
-EOF
+
+# Generated / intermediate data (reproducible from scripts)
+bins/
+test_results.jsonl
+test_10k_mixed.jsonl
+test_log.jsonl
+dashboard.html
